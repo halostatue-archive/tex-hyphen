@@ -1,6 +1,8 @@
+.autotest
 COPYING.txt
 History.txt
 LICENSE.txt
+Manifest.txt
 README.txt
 Rakefile
 bin/texhyphen
