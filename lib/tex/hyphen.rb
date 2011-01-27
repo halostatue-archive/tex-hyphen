@@ -1,251 +1,4 @@
-# :title: TeX::Hyphen
-# :main: TeX::Hyphen
-module TeX #:nodoc:
-    # = Introduction
-    # TeX::Hyphen -- hyphenate words using TeX's patterns
-    #
-    # == Usage
-    #   require 'tex/hyphen'
-    #   hyp = TeX::Hyphen.new(:file => 'hyphen.tex', :style => 'czech',
-    #                         :leftmin => 2, :rightmin => 2)
-    #   hyp = TeX::Hyphen.new
-    #
-    #   word = "representation"
-    #   points = hyp.hyphenate(word)  #=> [3, 5, 8, 10]
-    #   puts hyp.visualize(word)      #=> rep-re-sen-ta-tion
-    #
-    # == Description
-    #
-    # Constructor new() creates a new Hyphen object and loads the file with
-    # patterns into memory. Then you can ask it for hyphenation of a word by
-    # calling a method of this object. If no file is specified, the default
-    # Donald E. Knuth's <tt>hyphen.tex</tt>, that is included in this module,
-    # is used instead.
-    #
-    # Copyright::   Copyright (c) 2003 - 2004 Martin DeMello and Austin Ziegler
-    # Version::     0.5.0
-    # Based On::    Perl's <tt>TeX::Hyphen</tt>
-    #               [http://search.cpan.org/author/JANPAZ/TeX-Hyphen-0.140/lib/TeX/Hyphen.pm]
-    #               Copyright (c) 1997 - 2002 Jan Pazdziora
-    # Licence::     Ruby's
-    #
-  class Hyphen
-    DEBUG   = false;
-
-    VERSION = '0.5.0'
-
-    DEFAULT_MIN_LEFT  = 2
-    DEFAULT_MIN_RIGHT = 2
-
-      # Allows modification of the minimal starting substring for hyphenatino.
-    attr_accessor :min_left
-      # Allows modification of the minimal ending substring for hyphenatino.
-    attr_accessor :min_right
-
-      # A TeX hyphenation object can be constructed using a few different
-      # calling methods. Any method may also take a constructor block,
-      # allowing direct access to @file, @style, @min_left, and @min_right.
-      #
-      # +arg+ may be one of +Array+, +Hash+, +String+, or +nil+:
-      # [Array]       A four-element array in the form of:
-      #               [file, style, min_left, min_right]
-      # [Hash]        A hash with the following keys:
-      #
-      #               <tt>:file</tt> (*or*: <tt>'file'</tt>)
-      #
-      #               <tt>:style</tt> (*or*: <tt>'style'</tt>)
-      #
-      #               <tt>:min_left</tt> (*or*: <tt>:leftmin</tt>,
-      #               <tt>'min_left'</tt>, <tt>'leftmin'</tt>)
-      #
-      #               <tt>:min_right</tt> (*or*: <tt>:rightmin</tt>,
-      #               <tt>'min_right'</tt>, <tt>'rightmin'</tt>)
-      #
-      # [String]      This corresponds to @file.
-      #
-      # The parameters are:
-      #
-      # * file        The name of the file with the hyphenation patterns. It
-      #               will be loaded and the resulting object will be able to
-      #               hyphenate according to patterns in that file. If the
-      #               file is not specified or is +nil+, the default
-      #               hyphen.tex will be used (and is included in the module
-      #               definition).
-      # * style       Various language use special shortcuts to specify the
-      #               patterns. Instead of doing the full TeX expansion, we
-      #               use Ruby code to parse the patterns. The style options
-      #               requires a module found at "tex/hyphen/#{@style}" and
-      #               uses the parsing functions found in it.
-      #
-      #               Currently, the default Czech (works works for English
-      #               well) and German are available. See TeX::Hyphen::Czech
-      #               for more information, especially if you want to support
-      #               other languages and styles.
-      # * min_left    The minimum starting substring which will not be
-      #               hyphenated. This overrides the default specified in the
-      #               style file.
-      # * min_right   The minimum ending substrnig which will not be
-      #               hyphenated. This overrides the default specified int he
-      #               style file.
-      #
-      # *Reference*:: "Object Construction and Blocks"
-      #               <http://www.pragmaticprogrammer.com/ruby/articles/insteval.html>
-      #
-    def initialize(arg = nil, &block)
-      case arg
-      when Array
-        @file = arg[0]
-        @style = arg[1]
-        @min_left = arg[2]
-        @min_right = arg[3]
-      when Hash
-        @file = arg[:file] || arg['file']
-        @style = arg[:style] || arg['style']
-        @min_left = arg[:min_left] || arg[:leftmin] || arg['min_left'] || arg['leftmin']
-        @min_right = arg[:min_right] || arg[:rightmin] || arg['min_right'] || arg['rightmin']
-      when String
-        @file = arg
-      when NilClass
-        @file = @style = @min_left = @min_right = nil
-      end
-      @cache  = {}
-      @vcache = {}
-
-      instance_eval(&block) unless block.nil?
-
-      if @file.nil?
-        data = TeX::HyphenTeX.dup
-      else
-        data = @file
-        @import = true
-      end
-
-      @hyphen, @begin_hyphen, @end_hyphen, @both_hyphen, @exception =
-        (0...5).map{{}}
-
-      @style ||= 'czech'
-
-      unless @style.nil?
-        require "tex/hyphen/#{@style}"
-        mod = eval("TeX::Hyphen::#{@style.capitalize}")
-        self.extend(mod)
-
-        min_left ||= mod::DEFAULT_STYLE_MIN_LEFT
-        min_right ||= mod::DEFAULT_STYLE_MIN_RIGHT
-      end
-
-      @min_left ||= DEFAULT_MIN_LEFT
-      @min_right ||= DEFAULT_MIN_RIGHT
-
-      data = File.open(@file, 'r') if data == @file
-      parsepatterns(data) { |line| line =~ /\\patterns\{/ }
-      parsepatterns(data) { |line| not process_patterns(line.chomp) }
-      parsepatterns(data) { |line| line =~ /\\hyphenation\{/ }
-      parsepatterns(data) { |line| not process_hyphenation(line.chomp) }
-      data.close if data.kind_of?(IO)
-    end
-
-      # Returns a list of places where the word can be divided, as
-      #
-      #   hyp.hyphenate('representation')
-      #
-      # returns [3, 5, 8, 10]. If the word has been hyphenated previously, it
-      # will be returned from a per-instance cache.
-		def hyphenate(word)
-      word = word.downcase
-			STDERR.puts "Hyphenating #{word}" if DEBUG
-      return @cache[word] if @cache.has_key?(word)
-      res = @exception[word]
-      return @cache[word] = make_result_list(res) if res
-
-      @result = [0] * (word.length + 1)
-      rightstop = word.length - @min_right
-
-        # Walk the word
-      (0..rightstop).each do |pos|
-        restlength = word.length - pos
-        (1..restlength).each do |length|
-          substr = word[pos, length]
-					updateresult(@hyphen, substr, pos)
-					updateresult(@begin_hyphen, substr, pos) if pos == 0
-					updateresult(@end_hyphen, substr, pos) if length == restlength
-        end
-      end
-
-      updateresult(@both_hyphen, word, 0)
-
-			(0..@min_left).each { |i| @result[i] = 0 }
-			((-1 - @min_right)..(-1)).each { |i| @result[i] = 0 }
-			@cache[word] = make_result_list(@result)
-    end
-
-      # Returns a visualization of the hyphenation points, so:
-      #
-      #   hyp.visualize('representation')
-      #
-      # should return <tt>rep-re-sen-ta-tion</tt>, at elast for English
-      # patterns. If the word has been visualised previously, it will be
-      # returned from a per-instance cache.
-		def visualise(word)
-      return @vcache[word] if @vcache.has_key?(word)
-      w = word.dup
-			hyphenate(w).each_with_index do |pos, n| 
-				w[pos.to_i + n, 0] = '-' if pos != 0
-      end
-			@vcache[word] = w
-		end
-
-		alias visualize visualise
-
-    def clear_cache!
-      @cache.clear
-      @vcache.clear
-    end
-
-      # This function will hyphenate a word so that the first point is at most
-      # +size+ characters.
-    def hyphenate_to(word, size)
-      point = hyphenate(word).delete_if { |e| e >= size }.max
-      if point.nil?
-        [nil, word]
-      else
-        [word[0 ... point] + "-", word[point .. -1]]
-      end
-    end
-
-  private
-    def parsepatterns(data) #:nodoc:
-      if data.kind_of?(IO)
-        until file.eof?
-          line = file.gets.chomp.sub(/\s*\%.*$/, '')
-          break if yield line
-        end
-      elsif data.kind_of?(Array)
-        while (dline = data.shift)
-          line = dline.chomp.gsub(/\s*\%.*$/, '')
-          break if yield line
-        end
-      end
-    end
-
-		def updateresult(hash, str, pos) #:nodoc:
-			if hash.has_key?(str)
-				STDERR.print "#{pos}: #{str}: #{hash[str]}" if DEBUG
-				hash[str].split('').each_with_index do |c, i| 
-					c = c.to_i
-					@result[i + pos] = c if c > @result[i + pos]
-        end
-				STDERR.puts ": #{@result}" if DEBUG
-			end
-		end
-
-		def make_result_list(res) #:nodoc:
-      r = []
-      res.each_with_index { |c, i| r <<  i * (c.to_i % 2) }
-      r.reject { |i| i.to_i == 0 }
-		end
-	end
-
+module TeX
   Data_hyphen_tex = <<-EOS
 % The Plain TeX hyphenation tables [NOT TO BE CHANGED IN ANY WAY!]
 \\patterns{ % just type <return> if you're not using INITEX
@@ -4714,5 +4467,252 @@ ret-ri-bu-tion
 ta-ble
 }
 EOS
+
   HyphenTeX = Data_hyphen_tex.split(/\n/)
+end
+
+# = Introduction
+# TeX::Hyphen -- hyphenate words using TeX's patterns
+#
+# == Usage
+#   require 'tex/hyphen'
+#   hyp = TeX::Hyphen.new(:file => 'hyphen.tex', :style => 'czech',
+#                         :leftmin => 2, :rightmin => 2)
+#   hyp = TeX::Hyphen.new
+#
+#   word = "representation"
+#   points = hyp.hyphenate(word)  #=> [3, 5, 8, 10]
+#   puts hyp.visualize(word)      #=> rep-re-sen-ta-tion
+#
+# == Description
+#
+# Constructor new() creates a new Hyphen object and loads the file with
+# patterns into memory. Then you can ask it for hyphenation of a word by
+# calling a method of this object. If no file is specified, the default
+# Donald E. Knuth's <tt>hyphen.tex</tt>, that is included in this module, is
+# used instead.
+#
+# Copyright::   Copyright (c) 2003 - 2004 Martin DeMello and Austin Ziegler
+# Version::     0.5.1
+# Based On::    Perl's <tt>TeX::Hyphen</tt>
+#               [http://search.cpan.org/author/JANPAZ/TeX-Hyphen-0.140/lib/TeX/Hyphen.pm]
+#               Copyright (c) 1997 - 2002 Jan Pazdziora
+# Licence::     Ruby's
+#
+class TeX::Hyphen
+  DEBUG   = false;
+
+  VERSION = '0.5.1'
+
+  DEFAULT_MIN_LEFT  = 2
+  DEFAULT_MIN_RIGHT = 2
+
+  # Allows modification of the minimal starting substring for hyphenatino.
+  attr_accessor :min_left
+  # Allows modification of the minimal ending substring for hyphenatino.
+  attr_accessor :min_right
+
+  # A TeX hyphenation object can be constructed using a few different
+  # calling methods. Any method may also take a constructor block, allowing
+  # direct access to @file, @style, @min_left, and @min_right.
+  #
+  # +arg+ may be one of +Array+, +Hash+, +String+, or +nil+:
+  # [Array]       A four-element array in the form of:
+  #               [file, style, min_left, min_right]
+  # [Hash]        A hash with the following keys:
+  #
+  #               <tt>:file</tt> (*or*: <tt>'file'</tt>)
+  #
+  #               <tt>:style</tt> (*or*: <tt>'style'</tt>)
+  #
+  #               <tt>:min_left</tt> (*or*: <tt>:leftmin</tt>,
+  #               <tt>'min_left'</tt>, <tt>'leftmin'</tt>)
+  #
+  #               <tt>:min_right</tt> (*or*: <tt>:rightmin</tt>,
+  #               <tt>'min_right'</tt>, <tt>'rightmin'</tt>)
+  #
+  # [String]      This corresponds to @file.
+  #
+  # The parameters are:
+  #
+  # * file        The name of the file with the hyphenation patterns. It
+  #               will be loaded and the resulting object will be able to
+  #               hyphenate according to patterns in that file. If the file
+  #               is not specified or is +nil+, the default hyphen.tex will
+  #               be used (and is included in the module definition).
+  # * style       Various language use special shortcuts to specify the
+  #               patterns. Instead of doing the full TeX expansion, we use
+  #               Ruby code to parse the patterns. The style options
+  #               requires a module found at "tex/hyphen/#{@style}" and uses
+  #               the parsing functions found in it.
+  #
+  #               Currently, the default Czech (works works for English
+  #               well) and German are available. See TeX::Hyphen::Czech for
+  #               more information, especially if you want to support other
+  #               languages and styles.
+  # * min_left    The minimum starting substring which will not be
+  #               hyphenated. This overrides the default specified in the
+  #               style file.
+  # * min_right   The minimum ending substrnig which will not be hyphenated.
+  #               This overrides the default specified in the style file.
+  #
+  # *Reference*:: "Object Construction and Blocks"
+  #               <http://www.pragmaticprogrammer.com/ruby/articles/insteval.html>
+  #
+  def initialize(arg = nil, &block)
+    case arg
+    when Array
+      @file = arg[0]
+      @style = arg[1]
+      @min_left = arg[2]
+      @min_right = arg[3]
+    when Hash
+      @file = arg[:file] || arg['file']
+      @style = arg[:style] || arg['style']
+      @min_left = arg[:min_left] || arg[:leftmin] || arg['min_left'] || arg['leftmin']
+      @min_right = arg[:min_right] || arg[:rightmin] || arg['min_right'] || arg['rightmin']
+    when String
+      @file = arg
+    when NilClass
+      @file = @style = @min_left = @min_right = nil
+    end
+
+    @cache  = {}
+    @vcache = {}
+
+    instance_eval(&block) unless block.nil?
+
+    if @file.nil?
+      data = TeX::HyphenTeX.dup
+    else
+      data = @file
+      @import = true
+    end
+
+    @hyphen, @begin_hyphen, @end_hyphen, @both_hyphen, @exception =
+      (0...5).map{{}}
+
+    @style ||= 'czech'
+
+    unless @style.nil?
+      require "tex/hyphen/#{@style}"
+      mod = eval("TeX::Hyphen::#{@style.capitalize}")
+      self.extend(mod)
+
+      min_left ||= mod::DEFAULT_STYLE_MIN_LEFT
+      min_right ||= mod::DEFAULT_STYLE_MIN_RIGHT
+    end
+
+    @min_left ||= DEFAULT_MIN_LEFT
+    @min_right ||= DEFAULT_MIN_RIGHT
+
+    data = File.open(@file, 'r') if data == @file
+    parsepatterns(data) { |line| line =~ /\\patterns\{/ }
+    parsepatterns(data) { |line| not process_patterns(line.chomp) }
+    parsepatterns(data) { |line| line =~ /\\hyphenation\{/ }
+    parsepatterns(data) { |line| not process_hyphenation(line.chomp) }
+    data.close if data.kind_of?(IO)
+  end
+
+  # Returns a list of places where the word can be divided, as
+  #
+  #   hyp.hyphenate('representation')
+  #
+  # returns [3, 5, 8, 10]. If the word has been hyphenated previously, it
+  # will be returned from a per-instance cache.
+  def hyphenate(word)
+    word = word.downcase
+    STDERR.puts "Hyphenating #{word}" if DEBUG
+    return @cache[word] if @cache.has_key?(word)
+    res = @exception[word]
+    return @cache[word] = make_result_list(res) if res
+
+    @result = [0] * (word.length + 1)
+    rightstop = word.length - @min_right
+
+    # Walk the word
+    (0..rightstop).each do |pos|
+      restlength = word.length - pos
+      (1..restlength).each do |length|
+        substr = word[pos, length]
+        updateresult(@hyphen, substr, pos)
+        updateresult(@begin_hyphen, substr, pos) if pos == 0
+        updateresult(@end_hyphen, substr, pos) if length == restlength
+      end
+    end
+
+    updateresult(@both_hyphen, word, 0)
+
+    (0..@min_left).each { |i| @result[i] = 0 }
+    ((-1 - @min_right)..(-1)).each { |i| @result[i] = 0 }
+    @cache[word] = make_result_list(@result)
+  end
+
+  # Returns a visualization of the hyphenation points, so:
+  #
+  #   hyp.visualize('representation')
+  #
+  # should return <tt>rep-re-sen-ta-tion</tt>, at elast for English
+  # patterns. If the word has been visualised previously, it will be
+  # returned from a per-instance cache.
+  def visualise(word)
+    return @vcache[word] if @vcache.has_key?(word)
+    w = word.dup
+    hyphenate(w).each_with_index do |pos, n| 
+      w[pos.to_i + n, 0] = '-' if pos != 0
+    end
+    @vcache[word] = w
+  end
+
+  alias visualize visualise
+
+  def clear_cache!
+    @cache.clear
+    @vcache.clear
+  end
+
+  # This function will hyphenate a word so that the first point is at most
+  # +size+ characters.
+  def hyphenate_to(word, size)
+    point = hyphenate(word).delete_if { |e| e >= size }.max
+    if point.nil?
+      [nil, word]
+    else
+      [word[0 ... point] + "-", word[point .. -1]]
+    end
+  end
+
+  def parsepatterns(data) #:nodoc:
+    if data.kind_of?(IO)
+      until file.eof?
+        line = file.gets.chomp.sub(/\s*\%.*$/, '')
+        break if yield line
+      end
+    elsif data.kind_of?(Array)
+      while (dline = data.shift)
+        line = dline.chomp.gsub(/\s*\%.*$/, '')
+        break if yield line
+      end
+    end
+  end
+  private :parsepatterns
+
+  def updateresult(hash, str, pos) #:nodoc:
+    if hash.has_key?(str)
+      STDERR.print "#{pos}: #{str}: #{hash[str]}" if DEBUG
+      hash[str].split('').each_with_index do |c, i| 
+        c = c.to_i
+        @result[i + pos] = c if c > @result[i + pos]
+      end
+      STDERR.puts ": #{@result}" if DEBUG
+    end
+  end
+  private :updateresult
+
+  def make_result_list(res) #:nodoc:
+    r = []
+    res.each_with_index { |c, i| r <<  i * (c.to_i % 2) }
+    r.reject { |i| i.to_i == 0 }
+  end
+  private :make_result_list
 end

@@ -1,6 +1,7 @@
 == 0.5.1 / unreleased
 * This is a modified, unreleased version to mark the move of the code to
   GitHub from RubyForge.
+* TeX::Hyphen is incompatible with Ruby 1.9 due to encoding problems.
 
 == 0.5.0
 * No, really, *this* is the final release.
